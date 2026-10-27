@@ -1,5 +1,24 @@
-﻿.env
-data/
-*.csv
-__pycache__/
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and generated files
 .venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local application data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
