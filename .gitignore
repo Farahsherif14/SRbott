@@ -5,6 +5,7 @@
 
 # Python environments and generated files
 .venv/
+<<<<<<< HEAD
 venv/
 __pycache__/
 *.py[cod]
@@ -22,3 +23,14 @@ data/
 .DS_Store
 .idea/
 .vscode/
+=======
+*.joblib
+mlruns/
+data/raw/
+models/
+mlruns/
+__pycache__/
+*.joblib
+*.bak*
+.env
+>>>>>>> ml-classifier

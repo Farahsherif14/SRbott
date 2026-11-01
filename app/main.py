@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from redis import Redis
@@ -74,3 +75,13 @@ def dashboard():
     cats = " · ".join(f"{k}: {v}" for k,v in categories) or "No requests yet"
     urg = " · ".join(f"{k}: {v}" for k,v in urgencies) or "No requests yet"
     return f"""<!doctype html><html><head><meta charset='utf-8'><title>Service Requests</title><style>body{{font:16px system-ui;background:#f5f6fa;color:#19212e;margin:40px}}main{{max-width:1100px;margin:auto}}section,table{{background:white;padding:20px;border-radius:14px;margin:16px 0;width:100%;box-sizing:border-box}}table{{border-collapse:collapse}}td,th{{text-align:left;padding:10px;border-bottom:1px solid #eee}}small{{color:#64748b}}</style></head><body><main><h1>Service Requests</h1><small>Live operational snapshot</small><section><h2>{total} total requests</h2><p><b>Categories</b> · {cats}</p><p><b>Urgency</b> · {urg}</p></section><table><thead><tr><th>Ticket</th><th>Created</th><th>Unit</th><th>Category</th><th>Urgency</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></main></body></html>"""
+=======
+from fastapi import FastAPI
+
+app = FastAPI(title="SR Bot Orchestrator")
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"status": "ok"}
+>>>>>>> ml-classifier
