@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16
+    env_file: .env
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./app/db/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  metabase:
+    image: metabase/metabase:latest
+    ports: ["3000:3000"]
+    depends_on: [postgres]
+
+volumes:
+  pgdata:

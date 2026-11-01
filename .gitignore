@@ -3,3 +3,12 @@ data/
 *.csv
 __pycache__/
 .venv/
+*.joblib
+mlruns/
+data/raw/
+models/
+mlruns/
+__pycache__/
+*.joblib
+*.bak*
+.env
