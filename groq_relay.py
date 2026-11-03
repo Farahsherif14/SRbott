@@ -16,18 +16,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(413)
                 return
             request = json.loads(self.rfile.read(size))
-            response = Groq(api_key=settings.groq_api_key).chat.completions.create(
-                model=request["model"],
-                messages=[
+            response_format = ({"type": "json_object"} if request.get("json_object") else {
+                "type": "json_schema", "json_schema": {
+                    "name": "service_request_extraction", "strict": False,
+                    "schema": request["schema"],
+                }
+            })
+            completion_options = {
+                "model": request["model"],
+                "messages": [
                     {"role": "system", "content": "Return only valid JSON matching the supplied schema. Never invent missing information."},
                     {"role": "user", "content": request["prompt"]},
                 ],
-                response_format={"type": "json_schema", "json_schema": {
-                    "name": "service_request_extraction", "strict": False,
-                    "schema": request["schema"],
-                }},
-                temperature=0,
-            )
+                "response_format": response_format,
+                "temperature": 0,
+            }
+            if request.get("json_object"):
+                completion_options["reasoning_format"] = "hidden"
+            response = Groq(api_key=settings.groq_api_key).chat.completions.create(**completion_options)
             content = response.choices[0].message.content
             if not content:
                 raise ValueError("Groq returned an empty response")
@@ -39,8 +45,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         except Exception as exc:
-            # Avoid logging request text or credentials.
-            body = json.dumps({"error": type(exc).__name__}).encode()
+            # Log only the exception class/status: never log prompts, transcripts,
+            # API keys, or provider response bodies.
+            error_type = type(exc).__name__
+            status_code = getattr(exc, "status_code", None)
+            print(f"Groq relay error: {error_type}; status={status_code}")
+            body = json.dumps({"error": error_type, "status_code": status_code}).encode()
             self.send_response(502)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
