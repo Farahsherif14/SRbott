@@ -26,3 +26,7 @@ mlruns/
 .DS_Store
 .idea/
 .vscode/
+
+# Local speech model checkpoint
+tawasul_egy_stt.nemo
+.service-request-bot.lock
