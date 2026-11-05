@@ -26,6 +26,7 @@ Use from other code:
   clf.predict("الحوض مسدود")  # {'category', 'confidence', 'needs_review', 'urgency', 'urgency_confidence', 'language'}
 """
 import argparse
+from pathlib import Path
 import datetime
 import hashlib
 import json
@@ -97,7 +98,9 @@ def cached_vectors(texts):
 
 
 # ---------- training ----------
-def load_english(with_311):
+def load_training(with_311, langs, extra_dir=None, exclude_file=None):
+    """Training rows from *pool*.csv. langs: 'en' (English only, old behaviour) or e.g. 'en,ar,ar_eg' or 'all'."""
+    want = None if "all" in langs else set(langs)
     frames = []
     for p in sorted(PROC.glob("*pool*.csv")):
         if p.name == "train_pool.csv" and not with_311:
@@ -106,17 +109,44 @@ def load_english(with_311):
         d = pd.read_csv(p)
         if not {"text", "category"} <= set(d.columns):
             continue
-        if "language" in d.columns:
-            d = d[d["language"] == "en"]
-        print(f"train source {p.name}: {len(d):,} English rows")
+        if "language" in d.columns and want is not None:
+            d = d[d["language"].isin(want)]
+        print(f"train source {p.name}: {len(d):,} rows ({', '.join(sorted(d['language'].unique())) if 'language' in d.columns else 'n/a'})")
         if "urgency" not in d.columns:
             d["urgency"] = np.nan
         frames.append(d[["text", "category", "urgency"]])
+    if extra_dir:  # e.g. data\\synthetic: plain CSVs with text, category, language, urgency
+        for p in sorted(Path(extra_dir).glob("*.csv")):
+            d = pd.read_csv(p, encoding="utf-8-sig")
+            if not {"text", "category"} <= set(d.columns):
+                continue
+            if "language" in d.columns and want is not None:
+                d = d[d["language"].isin(want)]
+            if "urgency" not in d.columns:
+                d["urgency"] = np.nan
+            d["urgency"] = d["urgency"].astype(str).str.lower().replace({"emergency": "high"})
+            d["category"] = d["category"].astype(str).str.strip().str.lower().str.replace("_", " ")
+            frames.append(d[["text", "category", "urgency"]])
+        print(f"extra source {extra_dir}: added CSVs from the folder")
     if not frames:
-        raise SystemExit(f"No English *pool*.csv data found in {PROC}")
+        raise SystemExit(f"No *pool*.csv training data found in {PROC}")
     df = pd.concat(frames, ignore_index=True).dropna(subset=["text", "category"])
     df["text"] = df["text"].map(clean_text)
-    return df.drop_duplicates(subset=["text"]).reset_index(drop=True)
+    df = df.drop_duplicates(subset=["text"]).reset_index(drop=True)
+    # never train on texts that are in the Arabic check set
+    if CHECK_PATH.exists():
+        ck_keys = {_key(clean_text(t)) for t in pd.read_csv(CHECK_PATH)["text"].dropna()}
+        leak = df["text"].map(_key).isin(ck_keys)
+        if leak.any():
+            print(f"removed {int(leak.sum())} training rows that also appear in the check set")
+            df = df[~leak].reset_index(drop=True)
+    if exclude_file and Path(exclude_file).exists():  # near-duplicates found by check_near_duplicates.py
+        ex = {_key(clean_text(t)) for t in pd.read_csv(exclude_file, encoding="utf-8-sig")["text"].dropna()}
+        drop = df["text"].map(_key).isin(ex)
+        print(f"excluded {int(drop.sum())} training rows listed in {exclude_file}")
+        df = df[~drop].reset_index(drop=True)
+    df["lang"] = df["text"].map(detect_lang)
+    return df
 
 
 def threshold_table(conf, correct):
@@ -137,8 +167,9 @@ def pick_threshold(table, target_acc, min_coverage=0.5):
 
 
 def train(a):
-    tr = load_english(a.with_311)
-    print(f"\nEnglish training rows: {len(tr):,}")
+    langs = [l.strip() for l in a.langs.split(",") if l.strip()]
+    tr = load_training(a.with_311, langs, a.extra_dir, a.exclude_file)
+    print(f"\nTraining rows: {len(tr):,}  by detected language: {tr['lang'].value_counts().to_dict()}")
     X = cached_vectors(tr["text"].tolist())
     y = tr["category"].values
 
@@ -148,8 +179,13 @@ def train(a):
     ck["text"] = ck["text"].map(clean_text)
     Xc = cached_vectors(ck["text"].tolist())
 
-    mean_en, mean_ar = X.mean(0), Xc.mean(0)  # centering: text only, no labels
-    Xn, Xcn = _unit(X - mean_en), _unit(Xc - mean_ar)
+    # centering: text only, no labels. English mean from English rows; Arabic mean from the
+    # check-set text plus any Arabic training rows.
+    is_ar = (tr["lang"] == "ar").values
+    mean_en = X[~is_ar].mean(0)
+    mean_ar = np.vstack([Xc, X[is_ar]]).mean(0) if is_ar.any() else Xc.mean(0)
+    Xn = _unit(X - np.where(is_ar[:, None], mean_ar, mean_en))
+    Xcn = _unit(Xc - mean_ar)
     clf = LogisticRegression(max_iter=3000, C=C, class_weight="balanced")
     clf.fit(Xn, y)
 
@@ -195,10 +231,11 @@ def train(a):
 
     art = {"clf": clf, "urg_clf": urg_clf, "model": EMB_MODEL, "host": HOST, "prefix": PREFIX, "mean_en": mean_en, "mean_ar": mean_ar,
            "threshold": thr, "C": C, "n_train": len(tr), "seed": SEED,
-           "created": datetime.datetime.now().isoformat(timespec="seconds")}
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(art, MODEL_PATH)
-    print(f"\nSaved model -> {MODEL_PATH}")
+           "langs": langs, "created": datetime.datetime.now().isoformat(timespec="seconds")}
+    out_path = Path(a.out) if a.out else MODEL_PATH
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(art, out_path)
+    print(f"\nSaved model -> {out_path}")
 
     if a.mlflow:
         try:
@@ -207,11 +244,11 @@ def train(a):
             print("mlflow is not installed (pip install mlflow); skipping logging")
             return
         mlflow.set_experiment("category-classifier")
-        with mlflow.start_run(run_name="qwen3-emb4b-prefix-center"):
+        with mlflow.start_run(run_name=a.run_name):
             mlflow.log_params({"embedding_model": EMB_MODEL, "prefix": PREFIX, "C": C, "centering": "per-language mean",
-                               "with_311": a.with_311, "n_train": len(tr), "target_acc": a.target_acc})
+                               "with_311": a.with_311, "langs": ",".join(langs), "extra_dir": str(a.extra_dir), "n_train": len(tr), "target_acc": a.target_acc})
             mlflow.log_metrics(metrics)
-            mlflow.log_artifact(str(MODEL_PATH))
+            mlflow.log_artifact(str(out_path))
         print("Logged to MLflow (run: mlflow ui)")
 
 
@@ -251,7 +288,7 @@ class CategoryClassifier:
 
 
 def predict_cli(a):
-    clf = CategoryClassifier.load()
+    clf = CategoryClassifier.load(a.model or MODEL_PATH)
     for text, r in zip(a.texts, clf.predict(a.texts)):
         flag = "REVIEW" if r["needs_review"] else "auto"
         urg = f" urgency={r['urgency']}" if "urgency" in r else ""
@@ -301,7 +338,7 @@ def leaked_rows(df):
 
 
 def test_cli(a):
-    clf = CategoryClassifier.load()
+    clf = CategoryClassifier.load(a.model or MODEL_PATH)
     df = load_testset(clf.art["clf"].classes_)
     leak = leaked_rows(df)
     if leak.any():
@@ -338,10 +375,17 @@ def main():
     t = sub.add_parser("train")
     t.add_argument("--mlflow", action="store_true")
     t.add_argument("--with-311", action="store_true")
+    t.add_argument("--langs", default="en", help="training languages: en (default, old behaviour), 'en,ar,ar_eg', or all")
+    t.add_argument("--extra-dir", default=None, help="also train on every CSV in this folder, e.g. data\\synthetic")
+    t.add_argument("--exclude-file", default=None, help="CSV with a 'text' column of training rows to drop (from check_near_duplicates.py)")
+    t.add_argument("--out", default=None, help="where to save the model (default models/category_clf.joblib)")
+    t.add_argument("--run-name", default="qwen3-emb4b-prefix-center", help="MLflow run name")
     t.add_argument("--target-acc", type=float, default=0.95, help="accuracy wanted on auto-handled requests")
     p = sub.add_parser("predict")
     p.add_argument("texts", nargs="+")
-    sub.add_parser("test")
+    p.add_argument("--model", default=None, help="model file to use")
+    tt = sub.add_parser("test")
+    tt.add_argument("--model", default=None, help="model file to use")
     a = ap.parse_args()
     {"train": train, "predict": predict_cli, "test": test_cli}[a.cmd](a)
 
