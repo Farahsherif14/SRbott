@@ -23,6 +23,8 @@ def load_session(chat_id: str, user_id: str) -> dict:
 def save_session(chat_id: str, user_id: str, state: dict) -> None:
     value = {"user_id": user_id, "fields": state.get("fields") or state.get("previous_fields") or {},
              "phase": state.get("phase"), "missing_fields": state.get("missing_fields", []),
+             "location_confirmed": state.get("location_confirmed", {}),
+             "location_to_confirm": state.get("location_to_confirm", {}),
              "response_language": state.get("response_language", "en")}
     _fallback[chat_id] = value
     try:

@@ -29,10 +29,11 @@ class Handler(BaseHTTPRequestHandler):
                     {"role": "user", "content": request["prompt"]},
                 ],
                 "response_format": response_format,
-                "temperature": 0,
+                # GPT-OSS expects its native temperature; JSON response modes
+                # provide structure without forcing unsupported sampling.
+                "temperature": 1,
+                "include_reasoning": False,
             }
-            if request.get("json_object"):
-                completion_options["reasoning_format"] = "hidden"
             response = Groq(api_key=settings.groq_api_key).chat.completions.create(**completion_options)
             content = response.choices[0].message.content
             if not content:
@@ -49,7 +50,8 @@ class Handler(BaseHTTPRequestHandler):
             # API keys, or provider response bodies.
             error_type = type(exc).__name__
             status_code = getattr(exc, "status_code", None)
-            print(f"Groq relay error: {error_type}; status={status_code}")
+            detail = str(exc).replace("\n", " ")[:500]
+            print(f"Groq relay error: {error_type}; status={status_code}; detail={detail}")
             body = json.dumps({"error": error_type, "status_code": status_code}).encode()
             self.send_response(502)
             self.send_header("Content-Type", "application/json")

@@ -1,14 +1,14 @@
 import asyncio
 import fcntl
-import json
 import logging
+import os
 from io import BytesIO
 from pathlib import Path
+import tempfile
 import wave
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from vosk import KaldiRecognizer, Model
 from app.config import settings
 from app.flow import run_request_flow
 from app.flow import has_arabic
@@ -17,9 +17,9 @@ from app.session import clear_session, load_session
 
 bot = Bot(settings.telegram_bot_token)
 dp = Dispatcher()
-vosk_model = None
+asr_model = None
 logger = logging.getLogger(__name__)
-BOT_BUILD = "2026-11-01-followup-fix-2"
+BOT_BUILD = "2026-11-05-location-confirmation-2"
 
 def language_for(message: Message, text: str = "") -> str:
     session = load_session(str(message.chat.id), str(message.from_user.id))
@@ -90,23 +90,31 @@ async def intake_text(message: Message, text: str, *, is_voice: bool = False):
 
 @dp.message(F.voice)
 async def voice(message: Message):
-    global vosk_model
+    global asr_model
     language = language_for(message)
     if message.voice.file_size and message.voice.file_size > 25 * 1024 * 1024:
         await message.answer("التسجيل كبير جدًا. أرسل رسالة صوتية أقصر." if language == "ar"
                              else "That recording is too large. Please send a shorter voice message.")
         return
+    stage = "Telegram download"
     try:
         info = await bot.get_file(message.voice.file_id)
         audio_file = BytesIO()
         await bot.download_file(info.file_path, destination=audio_file)
-        if vosk_model is None:
-            model_path = Path(settings.vosk_model_path).expanduser()
-            if not model_path.is_dir():
-                raise RuntimeError(f"Vosk Arabic model not found: {model_path}")
-            vosk_model = Model(str(model_path))
-        text = await asyncio.to_thread(transcribe_vosk, audio_file.getvalue(), vosk_model)
-    except Exception:
+        if asr_model is None:
+            # Numba cannot write its cache into protected site-packages paths.
+            os.environ.setdefault("NUMBA_CACHE_DIR", str(Path(tempfile.gettempdir()) / "service-request-numba"))
+            import nemo.collections.asr as nemo_asr
+
+            model_path = Path(settings.tawasul_model_path).expanduser()
+            if not model_path.is_file():
+                raise RuntimeError(f"Tawasul NeMo checkpoint not found: {model_path}")
+            asr_model = nemo_asr.models.ASRModel.restore_from(str(model_path), map_location="cpu")
+            asr_model.eval()
+        stage = "audio decoding / Tawasul inference"
+        text = await asyncio.to_thread(transcribe_tawasul, audio_file.getvalue(), asr_model)
+    except Exception as exc:
+        logger.exception("Voice transcription failed during %s (%s)", stage, type(exc).__name__)
         await message.answer("تعذر تحويل التسجيل إلى نص الآن. حاول مرة أخرى أو أرسل التفاصيل كتابةً."
                              if language == "ar"
                              else "I couldn’t transcribe that recording just now. Please try again or type the details.")
@@ -117,8 +125,8 @@ async def voice(message: Message):
     await intake_text(message, text, is_voice=True)
 
 
-def transcribe_vosk(audio_content: bytes, model: Model) -> str:
-    """Decode Telegram OGG/Opus with the bundled ffmpeg binary, then run Vosk."""
+def transcribe_tawasul(audio_content: bytes, model) -> str:
+    """Decode Telegram OGG/Opus to mono 16 kHz WAV and run Tawasul ASR."""
     import subprocess
     from imageio_ffmpeg import get_ffmpeg_exe
 
@@ -128,14 +136,14 @@ def transcribe_vosk(audio_content: bytes, model: Model) -> str:
         input=audio_content, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         check=True, timeout=120,
     ).stdout
-    with wave.open(BytesIO(decoded), "rb") as wav:
-        pcm = wav.readframes(wav.getnframes())
-    recognizer = KaldiRecognizer(model, 16000)
-    recognizer.SetWords(False)
-    for offset in range(0, len(pcm), 8000):
-        recognizer.AcceptWaveform(pcm[offset:offset + 8000])
-    result = json.loads(recognizer.FinalResult())
-    return result.get("text", "").strip()
+    # NeMo's transcribe API accepts filenames; use a temporary WAV and remove it
+    # automatically when inference finishes.
+    with tempfile.NamedTemporaryFile(suffix=".wav") as audio_path:
+        audio_path.write(decoded)
+        audio_path.flush()
+        prediction = model.transcribe([audio_path.name])
+    item = prediction[0] if prediction else ""
+    return (item.text if hasattr(item, "text") else str(item)).strip()
 
 @dp.message(F.text & ~F.text.startswith("/"))
 async def text(message: Message):

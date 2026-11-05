@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     database_url: str = "sqlite:///./service_requests.db"
     redis_url: str = "redis://localhost:6379/0"
-    vosk_model_path: str = "models/vosk-model-ar-mgb2-0.4"
+    tawasul_model_path: str = "tawasul_egy_stt.nemo"
     session_ttl_seconds: int = 1800
     classifier_path: str = "data/category_model.joblib"
 
