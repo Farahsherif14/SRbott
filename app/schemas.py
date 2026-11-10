@@ -6,8 +6,14 @@ Urgency = Literal["low", "medium", "high", "emergency"]
 
 class UnitInfo(BaseModel):
     compound: str | None = None
-    building: str | None = None
-    unit_number: str | None = None
+    building: str | None = Field(
+        default=None,
+        description="Building number: digits with an optional single Latin letter before or after, e.g. 40, 40B, or B40.",
+    )
+    unit_number: str | None = Field(
+        default=None,
+        description="Unit/apartment number: digits only, with no letters, e.g. 7 or 204.",
+    )
 
 class ExtractedRequest(BaseModel):
     name: str | None = None

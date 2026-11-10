@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 from app.ai import correct_voice_transcript, extract_request
-from app.classifier import classify
+from app.classifier import ClassifierUnavailable, classify
 from app.db import ConversationTurn, ServiceRequest, SessionLocal
 from app.schemas import ExtractedRequest
 from app.session import load_session, save_session, clear_session
@@ -24,8 +24,147 @@ COMPOUND_NAMES = {
     "bellevie": "BELLEVIE",
     "cairo gate": "CAIRO GATE",
 }
-IDENTIFIER_PATTERN = re.compile(r"^(?:[A-Za-z]?\d+[A-Za-z]?)$", re.ASCII)
+BUILDING_PATTERN = re.compile(r"^(?:\d+[A-Z]?|[A-Z]\d+)$", re.ASCII)
+UNIT_PATTERN = re.compile(r"^\d+$", re.ASCII)
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+
+ENGLISH_NUMBERS = {
+    "zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+    "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90, "hundred": 100, "thousand": 1000,
+}
+ENGLISH_NUMBERS.update({
+    "زيرو": 0, "وان": 1, "تو": 2, "ثري": 3, "فور": 4, "فايف": 5,
+    "ساكس": 6, "سيكس": 6, "سفن": 7, "سيفن": 7, "ايت": 8,
+    "إيت": 8, "ناين": 9, "تين": 10, "إليفن": 11, "اليفن": 11,
+    "تويلف": 12, "ثيرتين": 13, "فورتي": 40, "توينتي": 20,
+    "ثيرتي": 30, "فيفتي": 50, "سيكستي": 60, "سيفنتي": 70,
+    "ايتي": 80, "ناينتي": 90,
+})
+ARABIC_NUMBERS = {
+    "صفر": 0, "واحد": 1, "واحدة": 1, "واحده": 1, "احد": 1,
+    "اتنين": 2, "اثنين": 2, "اثنان": 2, "تنين": 2,
+    "تلاتة": 3, "تلاته": 3, "ثلاثة": 3, "ثلاثه": 3,
+    "اربعة": 4, "اربعه": 4, "أربعة": 4, "أربعه": 4,
+    "خمسة": 5, "خمسه": 5, "ستة": 6, "سته": 6,
+    "سبعة": 7, "سبعه": 7, "تمانية": 8, "تمانيه": 8, "ثمانية": 8,
+    "ثمانيه": 8, "تسعة": 9, "تسعه": 9, "عشرة": 10, "عشره": 10,
+    "حداشر": 11, "احدعشر": 11, "حداشر": 11, "اتناشر": 12,
+    "اثناشر": 12, "تلتاشر": 13, "تلاتاشر": 13, "اربعتاشر": 14,
+    "خمستاشر": 15, "ستاشر": 16, "سبعتاشر": 17, "تمنتاشر": 18,
+    "تسعتاشر": 19, "عشرين": 20, "عشرون": 20, "عشرين": 20,
+    "ثلاثين": 30, "تلاتين": 30, "اربعين": 40, "أربعين": 40,
+    "خمسين": 50, "ستين": 60, "سبعين": 70, "تمانين": 80,
+    "ثمانين": 80, "تسعين": 90, "مائة": 100, "مية": 100,
+    "مئة": 100, "الف": 1000, "ألف": 1000,
+}
+SPOKEN_LETTERS = {
+    "a": "A", "ay": "A", "اي": "A", "إيه": "A", "أيه": "A",
+    "b": "B", "bee": "B", "بي": "B", "بى": "B",
+    "c": "C", "see": "C", "سي": "C", "سى": "C",
+    "d": "D", "dee": "D", "دي": "D", "دى": "D",
+    "e": "E", "ee": "E", "إي": "E", "اي": "E",
+    "f": "F", "eff": "F", "إف": "F", "اف": "F",
+    "g": "G", "gee": "G", "جي": "G", "جى": "G",
+    "h": "H", "aitch": "H", "إتش": "H", "اتش": "H",
+    "j": "J", "jay": "J", "جاي": "J", "كي": "K", "kay": "K",
+    "l": "L", "el": "L", "إل": "L", "m": "M", "em": "M",
+    "إم": "M", "n": "N", "en": "N", "إن": "N",
+}
+
+
+def _number_words_to_int(phrase: str) -> int | None:
+    """Convert a clear Arabic or English spoken cardinal number to digits."""
+    phrase = re.sub(r"[ًٌٍَُِّْـ]", "", phrase.casefold())
+    tokens = re.findall(r"[A-Za-z]+|[\u0600-\u06ff]+", phrase)
+    if not tokens:
+        return None
+    values: list[int] = []
+    for token in tokens:
+        token = token.strip()
+        if token in {"and", "و"}:
+            continue
+        value = ENGLISH_NUMBERS.get(token, ARABIC_NUMBERS.get(token))
+        if value is None and token.startswith("و"):
+            value = ENGLISH_NUMBERS.get(token[1:], ARABIC_NUMBERS.get(token[1:]))
+        if value is None:
+            return None
+        values.append(value)
+    if not values:
+        return None
+    if len(values) > 1 and all(value <= 9 for value in values):
+        return int("".join(str(value) for value in values))
+    total = current = 0
+    for value in values:
+        if value == 1000:
+            total += max(current, 1) * value
+            current = 0
+        elif value == 100:
+            current = max(current, 1) * value
+        else:
+            current += value
+    result = total + current
+    return result if 0 <= result <= 9999 else None
+
+
+def valid_building(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = re.sub(r"\s+", "", value.translate(ARABIC_DIGITS).strip()).upper()
+    return normalized if BUILDING_PATTERN.fullmatch(normalized) else None
+
+
+def valid_unit_number(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = re.sub(r"\s+", "", value.translate(ARABIC_DIGITS).strip())
+    return normalized if UNIT_PATTERN.fullmatch(normalized) else None
+
+
+def _parse_cued_number(segment: str, *, allow_letter: bool) -> str | None:
+    """Parse digits or clearly spoken Arabic/English numbers after a location cue."""
+    tokens = re.findall(r"[A-Za-z]+|\d+|[\u0600-\u06ff]+", segment.translate(ARABIC_DIGITS))
+    while tokens and tokens[0].casefold() in {"رقم", "هو", "هي", "بتاع", "بتاعة", "number", "no"}:
+        tokens.pop(0)
+    if not tokens:
+        return None
+
+    candidate: list[str] = []
+    letter = ""
+    letter_prefix = False
+    for token in tokens:
+        folded = token.casefold()
+        is_number = token.isdigit() or folded in ENGLISH_NUMBERS or folded in ARABIC_NUMBERS
+        if not is_number and folded.startswith("و"):
+            is_number = folded[1:] in ENGLISH_NUMBERS or folded[1:] in ARABIC_NUMBERS
+        if is_number:
+            candidate.append(token)
+            continue
+        spoken_letter = SPOKEN_LETTERS.get(folded)
+        if not allow_letter and (spoken_letter or (len(token) == 1 and token.isascii() and token.isalpha())):
+            return None
+        if allow_letter and not letter and spoken_letter:
+            letter = spoken_letter
+            letter_prefix = not candidate
+        elif allow_letter and not letter and len(token) == 1 and token.isascii() and token.isalpha():
+            letter = token.upper()
+            letter_prefix = not candidate
+        break
+
+    if not candidate:
+        return None
+    if len(candidate) == 1 and candidate[0].isdigit():
+        number = int(candidate[0])
+    else:
+        number = _number_words_to_int(" ".join(candidate))
+    if number is None:
+        return None
+    value = (letter + str(number)) if letter and letter_prefix else (str(number) + letter)
+    return valid_building(value) if allow_letter else valid_unit_number(value)
 
 
 def recover_explicit_voice_fields(text: str) -> dict[str, Any]:
@@ -60,48 +199,22 @@ def recover_explicit_voice_fields(text: str) -> dict[str, Any]:
             recovered["compound"] = COMPOUND_NAMES[canonical]
             break
 
-    # Strip a spoken Arabic letter name following a digit, e.g. ٧ بي -> 7B.
     cues = {
-        "building": r"(?:عمارة|مبنى|مبني|building)\s*[:：-]?\s*([A-Za-z]?\s*\d+\s*(?:[A-Za-z]|بي|سي|دي|إيه|اي|إف|اف|جي|كي|إل|إم|ام|إن|ان)?)",
-        "unit_number": r"(?:شقة|وحدة|رقم\s+الوحدة|unit)\s*[:：-]?\s*(\d+\s*(?:[A-Za-z]|بي|سي|دي|إيه|اي|إف|اف|جي|كي|إل|إم|ام|إن|ان)?)",
+        "building": r"(?:رقم\s+)?(?:عمارة|عماره|عمره|مبنى|مبني|building)\s*(?:رقم|number|no)?\s*[:：#-]?\s*",
+        "unit_number": r"(?:رقم\s+)?(?:وحدة|وحده|شقة|شقه|flat|apartment|unit)\s*(?:number|no|رقم)?\s*[:：#-]?\s*",
     }
+    found = []
     for key, pattern in cues.items():
         match = re.search(pattern, normalized, flags=re.IGNORECASE)
         if match:
-            value = match.group(1).translate(ARABIC_DIGITS).strip().upper()
-            value = re.sub(r"\s+", "", value)
-            for spoken, letter in (("بي", "B"), ("سي", "C"), ("دي", "D"),
-                                   ("إيه", "A"), ("اي", "A"), ("إف", "F"),
-                                   ("اف", "F"), ("جي", "G"), ("كي", "K"),
-                                   ("إل", "L"), ("إم", "M"), ("ام", "M"),
-                                   ("إن", "N"), ("ان", "N")):
-                value = value.replace(spoken.upper(), letter)
-            value = valid_identifier(value)
-            if value:
-                recovered[key] = value
-
-    # Egyptian Arabic ASR often joins the English code “four G” into “فورج”.
-    if "unit_number" not in recovered:
-        spoken_four_g = re.search(
-            r"(?:شقة|وحدة|رقم\s+الوحدة)\s*[:：-]?\s*(?:فور\s*جي|فورج|four\s*[- ]?g)(?![A-Za-z])",
-            normalized, flags=re.IGNORECASE)
-        if spoken_four_g:
-            recovered["unit_number"] = "4G"
-
-    # Whisper commonly renders the Egyptian phrase "عمارة ٤٠، شقة 7B"
-    # as a run-on sound-alike like "عمره 40 شأة 7B". Recover the ordered
-    # number/code pair only when both occur after a recognized compound.
-    if "compound" in recovered and not {"building", "unit_number"}.issubset(recovered):
-        tail = normalized
-        for alias in compound_aliases.get(next(k for k, v in COMPOUND_NAMES.items()
-                                                if v == recovered["compound"]), ()):
-            if alias in folded:
-                tail = normalized[folded.index(alias) + len(alias):]
-                break
-        pair = re.search(r"(?<![A-Za-z0-9])(\d{1,4})\s+(?:شقة|شأة|شقه|وحدة)?\s*([A-Za-z](?![A-Za-z]))", tail, re.IGNORECASE)
-        if pair:
-            recovered.setdefault("building", pair.group(1))
-            recovered.setdefault("unit_number", (pair.group(1) + pair.group(2)).upper())
+            found.append((match.start(), match.end(), key))
+    found.sort()
+    for index, (start, end, key) in enumerate(found):
+        segment_end = found[index + 1][0] if index + 1 < len(found) else len(normalized)
+        segment = normalized[end:segment_end].strip(" \t,،.;:!?؟-_")
+        value = _parse_cued_number(segment, allow_letter=(key == "building"))
+        if value:
+            recovered[key] = value
     return recovered
 
 
@@ -112,26 +225,18 @@ def canonical_compound(value: Any) -> str | None:
     return COMPOUND_NAMES.get(normalized)
 
 
-def valid_identifier(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = re.sub(r"\s+", "", value.translate(ARABIC_DIGITS).strip())
-    if not IDENTIFIER_PATTERN.fullmatch(normalized):
-        return None
-    return normalized.upper()
-
-
 def recover_single_missing_answer(text: str, previous: dict[str, Any]) -> dict[str, Any]:
     """Map a bare typed reply to the next missing identifier field."""
     unit = previous.get("unit") or {}
-    answer = text.strip()
-    identifier = valid_identifier(answer)
-    if identifier:
+    answer = text.strip().translate(ARABIC_DIGITS)
+    if answer.isdigit():
+        identifier = answer
         # The bot asks for the building before the unit, so a bare code answers
         # the first still-missing identifier in that same order.
         for field in ("building", "unit_number"):
             if not unit.get(field):
-                return {field: identifier}
+                return {field: (valid_building(identifier) if field == "building"
+                                else valid_unit_number(identifier))}
     return {}
 
 
@@ -139,16 +244,7 @@ def recover_typed_location_answers(text: str) -> dict[str, Any]:
     """Read explicit typed building/unit answers without relying on the LLM."""
     normalized = text.translate(ARABIC_DIGITS)
     recovered: dict[str, Any] = {}
-    patterns = {
-        "building": r"(?:building|عمارة|مبنى|مبني|رقم\s+المبنى)\s*[:：#-]?\s*([A-Za-z]?\s*\d+\s*[A-Za-z]?)",
-        "unit_number": r"(?:unit(?:\s+number)?|apartment|flat|وحدة|رقم\s+الوحدة|شقة)\s*[:：#-]?\s*(\d+\s*[A-Za-z]?)",
-    }
-    for field, pattern in patterns.items():
-        match = re.search(pattern, normalized, flags=re.IGNORECASE)
-        if match:
-            value = valid_identifier(match.group(1))
-            if value:
-                recovered[field] = value
+    recovered.update(recover_explicit_voice_fields(normalized))
     return recovered
 
 
@@ -161,6 +257,10 @@ class RequestState(TypedDict, total=False):
     is_voice: bool
     response_language: str | None
     previous_fields: dict[str, Any]
+    previous_phase: str
+    previous_location_confirmed: dict[str, str]
+    location_to_confirm: dict[str, str]
+    location_confirmed: dict[str, str]
     fields: dict[str, Any]
     missing_fields: list[str]
     confirmation: bool | None
@@ -168,10 +268,11 @@ class RequestState(TypedDict, total=False):
     phase: str
     prediction: dict[str, Any]
     ticket_number: str
+    location_confirmation_required: bool
 
 
 def transcribe_node(state: RequestState) -> dict:
-    # Telegram voice has already been transcribed locally by Vosk.
+    # Telegram voice has already been transcribed locally by Tawasul.
     transcript = state.get("transcript") or state.get("message", "")
     language = state.get("response_language")
     if language is None:
@@ -196,13 +297,13 @@ def extract_node(state: RequestState) -> dict:
                 text, response_language=state.get("response_language") or "ar")
         except Exception as exc:
             # Transcript correction is an enhancement. Preserve intake availability
-            # by extracting from the original Whisper transcript if it fails.
+            # by extracting from the original Tawasul transcript if it fails.
             detail = str(exc) if str(exc).startswith(("Transcript correction relay error:",
                                                        "Transcript correction relay is unreachable")) else type(exc).__name__
             logger.warning("Voice transcript correction failed: %s", detail)
     explicit_voice_fields = {}
     if state.get("is_voice"):
-        # Whisper/Vosk may hear a code correctly while the proofreading pass
+        # Tawasul may hear a code correctly while the proofreading pass
         # drops or alters it. Prefer values explicitly present in the raw ASR.
         explicit_voice_fields.update(recover_explicit_voice_fields(extraction_text))
         explicit_voice_fields.update(recover_explicit_voice_fields(text))
@@ -241,8 +342,8 @@ def extract_node(state: RequestState) -> dict:
     # Normalize and validate location identifiers before confirmation so a
     # spoken word or unsupported compound can never appear as accepted data.
     merged["unit"]["compound"] = canonical_compound(merged["unit"].get("compound"))
-    merged["unit"]["building"] = valid_identifier(merged["unit"].get("building"))
-    merged["unit"]["unit_number"] = valid_identifier(merged["unit"].get("unit_number"))
+    merged["unit"]["building"] = valid_building(merged["unit"].get("building"))
+    merged["unit"]["unit_number"] = valid_unit_number(merged["unit"].get("unit_number"))
     for key in ("name", "phone", "issue_description"):
         if new.get(key) in (None, "") and previous.get(key):
             merged[key] = previous[key]
@@ -258,22 +359,38 @@ def extract_node(state: RequestState) -> dict:
     if merged.get("issue_needs_detail"):
         missing.append("issue_details")
     merged["missing_fields"] = missing
+    previously_confirmed = state.get("previous_location_confirmed") or {}
+    location_to_confirm = {}
+    if state.get("is_voice"):
+        for key in ("building", "unit_number"):
+            value = merged["unit"].get(key)
+            if value and value != previously_confirmed.get(key):
+                location_to_confirm[key] = value
     return {"fields": merged, "missing_fields": missing, "confirmation": None,
             "corrected_transcript": extraction_text if state.get("is_voice") else "",
+            "location_confirmed": previously_confirmed,
+            "location_to_confirm": location_to_confirm,
+            "location_confirmation_required": bool(location_to_confirm),
             "phase": "extracted"}
 
 
 def route_after_transcribe(state: RequestState) -> str:
     message = state.get("message", "").strip().casefold()
     existing = state.get("previous_fields") or {}
+    session_phase = state.get("previous_phase")
+    yes = {"yes", "confirm", "confirmed", "نعم", "أؤكد", "موافق", "تأكيد", "صح", "صحيح"}
+    no = {"no", "لا", "غلط", "مش صحيح", "غير صحيح", "تعديل"}
+    if session_phase == "awaiting_location_confirmation":
+        if message in yes:
+            return "accept_location"
+        if message in no:
+            return "request_location_correction"
     complete = not any(not v for v in [
         (existing.get("unit") or {}).get("compound"),
         (existing.get("unit") or {}).get("building"),
         (existing.get("unit") or {}).get("unit_number"),
         existing.get("issue_description"),
     ])
-    yes = {"yes", "confirm", "confirmed", "نعم", "أؤكد", "موافق", "تأكيد"}
-    no = {"no", "edit", "change", "لا", "تعديل"}
     if state.get("confirmation") is not None:
         return "classify" if state["confirmation"] else "declined"
     if message in yes and complete:
@@ -284,7 +401,63 @@ def route_after_transcribe(state: RequestState) -> str:
 
 
 def missing_or_confirmation(state: RequestState) -> str:
+    if state.get("location_confirmation_required"):
+        return "confirm_location"
     return "follow_up" if state.get("missing_fields") else "confirm_request"
+
+
+def confirm_location_node(state: RequestState) -> dict:
+    location = state.get("location_to_confirm") or {}
+    if state.get("response_language") == "ar":
+        recognized = []
+        if location.get("building"):
+            recognized.append(f"رقم المبنى {location['building']}")
+        if location.get("unit_number"):
+            recognized.append(f"رقم الوحدة {location['unit_number']}")
+        response = (f"فهمت {' و'.join(recognized)}.\n"
+                    "هل الرقم صحيح؟ اكتب «نعم» للتأكيد، أو أرسل التصحيح. "
+                    "رقم الوحدة أرقام فقط، ورقم المبنى يمكن أن يكون حرفًا واحدًا قبل الأرقام أو بعدها.")
+    else:
+        recognized = []
+        if location.get("building"):
+            recognized.append(f"building {location['building']}")
+        if location.get("unit_number"):
+            recognized.append(f"unit {location['unit_number']}")
+        response = (f"I heard {' and '.join(recognized)}.\n"
+                    "Is that correct? Reply YES to confirm or send a correction. "
+                    "A unit number contains digits only; a building number may have one letter before or after the digits.")
+    return {"response": response, "phase": "awaiting_location_confirmation"}
+
+
+def accept_location_node(state: RequestState) -> dict:
+    fields = state.get("previous_fields") or {}
+    previously_confirmed = state.get("previous_location_confirmed") or {}
+    newly_confirmed = state.get("location_to_confirm") or {}
+    if not newly_confirmed:
+        # Backward compatibility for a pending confirmation created before
+        # confirmed values were tracked separately in the session.
+        unit = fields.get("unit") or {}
+        newly_confirmed = {key: unit[key] for key in ("building", "unit_number") if unit.get(key)}
+    confirmed = {**previously_confirmed, **newly_confirmed}
+    required = {"compound": (fields.get("unit") or {}).get("compound"),
+                "building": (fields.get("unit") or {}).get("building"),
+                "unit_number": (fields.get("unit") or {}).get("unit_number"),
+                "issue_description": fields.get("issue_description")}
+    missing = [key for key, value in required.items() if not value]
+    if fields.get("issue_needs_detail"):
+        missing.append("issue_details")
+    return {"fields": fields, "missing_fields": missing,
+            "location_confirmed": confirmed, "location_to_confirm": {},
+            "location_confirmation_required": False, "phase": "location_confirmed"}
+
+
+def request_location_correction_node(state: RequestState) -> dict:
+    if state.get("response_language") == "ar":
+        response = "من فضلك أرسل رقم المبنى ورقم الوحدة الصحيحين، مثل: المبنى B40 أو 40B، والوحدة 7."
+    else:
+        response = "Please send the correct building and unit numbers, for example: building B40 or 40B, unit 7."
+    return {"fields": state.get("previous_fields") or {},
+            "response": response, "phase": "awaiting_location_correction"}
 
 
 def follow_up_node(state: RequestState) -> dict:
@@ -294,8 +467,8 @@ def follow_up_node(state: RequestState) -> dict:
     other_missing = [key for key in missing if key != "issue_details"]
     if arabic:
         labels = {"compound": "اسم الكومباوند (Marassi أو Soul أو Uptown Cairo أو Mivida أو Bellevie أو Cairo Gate)",
-                  "building": "رقم المبنى (رقم أو رقم مع حرف واحد)",
-                  "unit_number": "رقم الوحدة (رقم أو رقم مع حرف واحد)", "issue_description": "وصف المشكلة"}
+                  "building": "رقم المبنى (حرف واحد قبل الأرقام أو بعدها، مثل B40 أو 40B)",
+                  "unit_number": "رقم الوحدة (أرقام فقط بدون حروف)", "issue_description": "وصف المشكلة"}
         requested = "، ".join(labels.get(key, "") for key in other_missing if labels.get(key))
         question = f"من فضلك أرسل أو قل في رسالة صوتية: {requested}." if requested else ""
         if details_needed:
@@ -303,8 +476,8 @@ def follow_up_node(state: RequestState) -> dict:
             question = f"{question}\n{details_prompt}" if question else details_prompt
     else:
         labels = {"compound": "compound (Marassi, Soul, Uptown Cairo, Mivida, Bellevie, or Cairo Gate)",
-                  "building": "building number (digits, optionally followed by one letter)",
-                  "unit_number": "unit number (digits, optionally followed by one letter)",
+                  "building": "building number (one letter before or after the digits, e.g. B40 or 40B)",
+                  "unit_number": "unit number (digits only, no letters)",
                   "issue_description": "problem description"}
         requested = ", ".join(labels[key] for key in other_missing if key in labels)
         question = f"Please type or say in a voice message: {requested}." if requested else ""
@@ -358,12 +531,17 @@ def classify_node(state: RequestState) -> dict:
     fields = state.get("fields") or state.get("previous_fields") or {}
     try:
         prediction = classify(fields.get("issue_description") or "")
-    except NotImplementedError:
-        response = ("تم تأكيد التفاصيل، لكن التصنيف غير جاهز بعد، لذلك لم يتم حفظ الطلب."
-                    if state.get("response_language") == "ar"
-                    else "Your details are confirmed, but classification is not implemented yet, so the request was not saved.")
-        return {"phase": "classification_not_implemented",
-                "response": response}
+    except ClassifierUnavailable as exc:
+        logger.error("Request classifier unavailable: %s", exc)
+        response = (
+            "تم تأكيد طلبك، لكن التصنيف المحلي غير متاح الآن. شغّل Ollama وتأكد من تثبيت "
+            "qwen3-embedding:4b، ثم أرسل «نعم» لإعادة المحاولة. لم يتم حفظ الطلب بعد."
+            if state.get("response_language") == "ar" else
+            "Your request is confirmed, but local classification is unavailable. Start Ollama "
+            "and ensure qwen3-embedding:4b is installed, then reply YES to retry. The request "
+            "has not been saved yet."
+        )
+        return {"phase": "classification_unavailable", "response": response}
     return {"prediction": prediction, "phase": "classified"}
 
 
@@ -379,8 +557,19 @@ def save_node(state: RequestState) -> dict:
             urgency=prediction.get("urgency", "medium"), confidence=prediction["confidence"],
             predictions=prediction))
         db.commit()
-    response = (f"تم حفظ الطلب. رقم التذكرة {ticket}." if state.get("response_language") == "ar"
-                else f"Request saved. Ticket {ticket}.")
+    if state.get("response_language") == "ar":
+        categories = {"plumbing": "سباكة", "electricity": "كهرباء", "AC": "تكييف",
+                      "carpentry": "نجارة", "pest control": "مكافحة آفات", "general": "عام"}
+        urgencies = {"low": "منخفضة", "medium": "متوسطة", "high": "عالية", "emergency": "طارئة"}
+        category_text = categories.get(prediction["category"], prediction["category"])
+        urgency_text = urgencies.get(prediction.get("urgency", "medium"), "متوسطة")
+        confidence_note = " (مبدئي)" if prediction.get("needs_review") else ""
+        response = (f"تم حفظ الطلب وتصنيفه{confidence_note}: {category_text}، "
+                    f"الأولوية {urgency_text}. رقم التذكرة {ticket}.")
+    else:
+        confidence_note = " (provisional)" if prediction.get("needs_review") else ""
+        response = (f"Request saved and classified{confidence_note}: {prediction['category']}, "
+                    f"priority {prediction.get('urgency', 'medium')}. Ticket {ticket}.")
     return {"ticket_number": ticket, "phase": "saved", "response": response}
 
 
@@ -389,16 +578,26 @@ builder.add_node("transcribe", transcribe_node)
 builder.add_node("extract", extract_node)
 builder.add_node("follow_up", follow_up_node)
 builder.add_node("confirm_request", confirmation_node)
+builder.add_node("confirm_location", confirm_location_node)
+builder.add_node("accept_location", accept_location_node)
+builder.add_node("request_location_correction", request_location_correction_node)
 builder.add_node("declined", declined_node)
 builder.add_node("classify", classify_node)
 builder.add_node("save", save_node)
 builder.add_edge(START, "transcribe")
 builder.add_conditional_edges("transcribe", route_after_transcribe,
-    {"extract": "extract", "classify": "classify", "declined": "declined"})
+    {"extract": "extract", "classify": "classify", "declined": "declined",
+     "accept_location": "accept_location",
+     "request_location_correction": "request_location_correction"})
 builder.add_conditional_edges("extract", missing_or_confirmation,
+    {"follow_up": "follow_up", "confirm_request": "confirm_request",
+     "confirm_location": "confirm_location"})
+builder.add_conditional_edges("accept_location", missing_or_confirmation,
     {"follow_up": "follow_up", "confirm_request": "confirm_request"})
 builder.add_edge("follow_up", END)
 builder.add_edge("confirm_request", END)
+builder.add_edge("confirm_location", END)
+builder.add_edge("request_location_correction", END)
 builder.add_edge("declined", END)
 builder.add_conditional_edges("classify", lambda s: "save" if s.get("phase") == "classified" else END,
     {"save": "save", END: END})
@@ -414,6 +613,10 @@ def run_request_flow(*, chat_id: str, user_id: str, message: str = "",
     prior = fields or saved.get("fields") or {}
     result = request_graph.invoke({"chat_id": chat_id, "user_id": user_id,
         "message": message, "transcript": transcript, "previous_fields": prior,
+        "previous_phase": saved.get("phase", ""),
+        "previous_location_confirmed": saved.get("location_confirmed", {}),
+        "location_confirmed": saved.get("location_confirmed", {}),
+        "location_to_confirm": saved.get("location_to_confirm", {}),
         "is_voice": is_voice,
         "fields": prior, "confirmation": confirmed,
         "response_language": saved.get("response_language")})

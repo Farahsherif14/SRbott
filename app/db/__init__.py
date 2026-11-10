@@ -1,15 +1,23 @@
+"""SQLAlchemy models used by the service request API and Telegram bot."""
 from datetime import datetime
-from sqlalchemy import create_engine, String, Text, DateTime, JSON, Integer, Float
+
+from sqlalchemy import JSON, DateTime, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+
 from app.config import settings
+
 
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
-class Base(DeclarativeBase): pass
+
+class Base(DeclarativeBase):
+    pass
+
 
 class ServiceRequest(Base):
     __tablename__ = "service_requests"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     ticket_number: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     telegram_user_id: Mapped[str] = mapped_column(String(64), index=True)
@@ -26,12 +34,16 @@ class ServiceRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     predictions: Mapped[dict] = mapped_column(JSON, default=dict)
 
+
 class ConversationTurn(Base):
     __tablename__ = "conversation_turns"
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     chat_id: Mapped[str] = mapped_column(String(64), index=True)
     role: Mapped[str] = mapped_column(String(16))
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-def init_db(): Base.metadata.create_all(engine)
+
+def init_db() -> None:
+    Base.metadata.create_all(engine)
