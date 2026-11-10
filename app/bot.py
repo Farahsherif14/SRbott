@@ -1,5 +1,5 @@
 import asyncio
-import fcntl
+import socket
 import json
 import logging
 from io import BytesIO
@@ -19,7 +19,7 @@ bot = Bot(settings.telegram_bot_token)
 dp = Dispatcher()
 vosk_model = None
 logger = logging.getLogger(__name__)
-BOT_BUILD = "2026-11-01-followup-fix-2"
+BOT_BUILD = "2026-11-10-windows-lock"
 
 def language_for(message: Message, text: str = "") -> str:
     session = load_session(str(message.chat.id), str(message.from_user.id))
@@ -144,19 +144,18 @@ async def text(message: Message):
 async def main():
     if not settings.telegram_bot_token:
         raise RuntimeError("Set TELEGRAM_BOT_TOKEN before starting the bot")
-    lock_path = Path(__file__).resolve().parent.parent / ".service-request-bot.lock"
-    lock_file = lock_path.open("a+")
+    # Single-instance guard that works on Windows and Linux (the old fcntl lock is Unix-only).
+    lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        lock_file.close()
+        lock_socket.bind(("127.0.0.1", 47653))
+    except OSError as exc:
+        lock_socket.close()
         raise SystemExit("The Service Request bot is already running. Stop that instance before starting another.") from exc
     init_db()
     print(f"Service Request bot build {BOT_BUILD} loaded from {Path(__file__).resolve()}", flush=True)
     try:
         await dp.start_polling(bot)
     finally:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        lock_file.close()
+        lock_socket.close()
 
 if __name__ == "__main__": asyncio.run(main())

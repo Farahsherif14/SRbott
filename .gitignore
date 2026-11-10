@@ -1,28 +1,2 @@
-# Secrets and local configuration
+node_modules
 .env
-.env.*
-!.env.example
-
-# Python environments and generated files
-.venv/
-venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Local application data and downloaded models
-data/
-models/
-*.db
-*.sqlite
-*.sqlite3
-*.joblib
-*.bak*
-mlruns/
-
-# OS/editor files
-.DS_Store
-.idea/
-.vscode/
