@@ -8,6 +8,12 @@ def test_missing_fields():
 
 
 def test_complete():
-    sr = ExtractedSR(compound="Uptown", building="B", unit_number="204",
-                     name="Ali", phone="+201000000000", issue_description="Leaking sink")
+    sr = ExtractedSR(
+        compound="Uptown",
+        building="B",
+        unit_number="204",
+        name="Ali",
+        phone="+201000000000",
+        issue_description="Leaking sink",
+    )
     assert sr.is_complete()
