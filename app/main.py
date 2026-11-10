@@ -4,16 +4,19 @@ from redis import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import select, func
 from app.config import settings
+from app.logging_setup import setup_logging
 from app.db import init_db, SessionLocal, ServiceRequest
 from app.schemas import IntakeMessage, ConfirmRequest, StatusRequest
 from app.flow import run_request_flow
 from app.session import clear_session
 
 app = FastAPI(title="Service Request Bot", version="0.1.0")
-redis = Redis.from_url(settings.redis_url, decode_responses=True)
+redis = Redis.from_url(settings.redis_url.get_secret_value(), decode_responses=True)
 
 @app.on_event("startup")
-def startup(): init_db()
+def startup():
+    setup_logging(secrets=settings.log_secrets())
+    init_db()
 
 def remember(chat_id: str, role: str, text: str):
     try:
@@ -31,7 +34,8 @@ def intake(payload: IntakeMessage):
     try:
         result = run_request_flow(chat_id=payload.chat_id, user_id=payload.user_id, message=payload.text)
     except Exception as exc:
-        raise HTTPException(503, f"Request flow failed: {type(exc).__name__}: {exc}")
+        # Only the error type: the error text can hold the user's message or a database row
+        raise HTTPException(503, f"Request flow failed: {type(exc).__name__}")
     remember(payload.chat_id, "assistant", result.get("response", ""))
     fields = result.get("fields") or result.get("previous_fields") or {}
     return {"fields": fields, "complete": not result.get("missing_fields"),
@@ -44,7 +48,8 @@ def confirm(payload: ConfirmRequest):
         result = run_request_flow(chat_id=payload.chat_id, user_id=payload.user_id,
             confirmed=payload.confirmed, fields=payload.fields.model_dump())
     except Exception as exc:
-        raise HTTPException(503, f"Request flow failed: {type(exc).__name__}: {exc}")
+        # Only the error type: the error text can hold the user's message or a database row
+        raise HTTPException(503, f"Request flow failed: {type(exc).__name__}")
     return {"saved": result.get("phase") == "saved", "phase": result.get("phase"),
             "ticket_number": result.get("ticket_number"), "message": result.get("response")}
 

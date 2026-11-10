@@ -49,7 +49,7 @@ dashboard = [
 line-length = 100
 # Ruff checks only these paths for now. Other folders are added when their owner agrees
 # or when they are reworked, so CI never forces style-only changes on open work.
-include = ["tests/**/*.py"]
+include = ["tests/**/*.py", "app/config.py", "app/logging_setup.py"]
 
 [tool.ruff.lint]
 # Keep ruff's default rules and add: I = import order, UP = modern Python syntax, B = common bugs

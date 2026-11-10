@@ -11,12 +11,14 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
 from app.config import settings
+from app.logging_setup import setup_logging
 from app.flow import run_request_flow
 from app.flow import has_arabic
 from app.db import init_db
 from app.session import clear_session, load_session
 
-bot = Bot(settings.telegram_bot_token)
+settings.require("telegram_bot_token")
+bot = Bot(settings.telegram_bot_token.get_secret_value())
 dp = Dispatcher()
 asr_model = None
 logger = logging.getLogger(__name__)
@@ -153,6 +155,7 @@ async def text(message: Message):
 async def main():
     if not settings.telegram_bot_token:
         raise RuntimeError("Set TELEGRAM_BOT_TOKEN before starting the bot")
+    setup_logging(secrets=settings.log_secrets())
     # Single-instance guard that works on Windows and Linux (the old fcntl lock is Unix-only).
     lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
