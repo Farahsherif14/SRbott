@@ -4,7 +4,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 from app.config import settings
 
-redis = Redis.from_url(settings.redis_url, decode_responses=True)
+redis = Redis.from_url(settings.redis_url.get_secret_value(), decode_responses=True)
 _fallback: dict[str, dict] = {}
 
 def _key(chat_id: str) -> str:
