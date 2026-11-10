@@ -1,0 +1,18 @@
+Alembic migrations for the PostgreSQL tables in app/db/models.py. Each file in versions/ changes
+the database one step: upgrade() goes forward, downgrade() goes back. The files form a chain
+(down_revision). The database must be running: docker compose up -d --wait postgres
+
+  uv run alembic upgrade head          apply every migration the database doesn't have yet
+  uv run alembic downgrade -1          undo the last migration
+  uv run alembic current               which migration the database is at now
+  uv run alembic history               the chain of migrations
+  uv run alembic upgrade head --sql    print the SQL only, change nothing
+  uv run alembic check                 fail if app/db/models.py has changes that no migration has
+  uv run alembic revision --autogenerate -m "short title"   write a new migration from models.py
+
+Rules:
+- Never change a table by hand (psql). Every change is a migration, reviewed in a PR.
+- Read every generated file before you apply it. Autogenerate misses CHECK changes and views.
+- Never edit a migration that is already on main: other databases have run it. Write a new one.
+- A migration never imports code that can change (e.g. app/labels.py): it must always
+  build what existed at its time.
