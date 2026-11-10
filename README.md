@@ -21,6 +21,8 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
+On Windows (PowerShell), activate with `.venv\Scripts\activate` instead; `run_bot.py` then uses `.venv\Scripts\python.exe`.
+
 Set `GROQ_API_KEY` and `TELEGRAM_BOT_TOKEN` in `.env`. Keep this file private. The `.env.example` file lists the expected settings. Place the Tawasul checkpoint at `tawasul_egy_stt.nemo`, or set `TAWASUL_MODEL_PATH`.
 
 Start the Telegram bot and its local Groq relay:
