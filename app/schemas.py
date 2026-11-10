@@ -8,7 +8,7 @@ class UnitInfo(BaseModel):
     compound: str | None = None
     building: str | None = Field(
         default=None,
-        description="Building number: digits optionally followed by one Latin letter, e.g. 40 or 40B.",
+        description="Building number: digits with an optional single Latin letter before or after, e.g. 40, 40B, or B40.",
     )
     unit_number: str | None = Field(
         default=None,

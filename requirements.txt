@@ -14,3 +14,7 @@ nemo_toolkit[asr]==2.0.0
 pytorch-lightning==2.4.0
 matplotlib>=3.7,<4
 numpy>=1.26,<2
+pandas>=2.0,<3
+scikit-learn>=1.3,<2
+joblib>=1.3,<2
+streamlit>=1.40,<2

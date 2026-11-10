@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 from app.ai import correct_voice_transcript, extract_request
-from app.classifier import classify
+from app.classifier import ClassifierUnavailable, classify
 from app.db import ConversationTurn, ServiceRequest, SessionLocal
 from app.schemas import ExtractedRequest
 from app.session import load_session, save_session, clear_session
@@ -24,7 +24,7 @@ COMPOUND_NAMES = {
     "bellevie": "BELLEVIE",
     "cairo gate": "CAIRO GATE",
 }
-BUILDING_PATTERN = re.compile(r"^\d+[A-Z]?$", re.ASCII)
+BUILDING_PATTERN = re.compile(r"^(?:\d+[A-Z]?|[A-Z]\d+)$", re.ASCII)
 UNIT_PATTERN = re.compile(r"^\d+$", re.ASCII)
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
 
@@ -135,6 +135,7 @@ def _parse_cued_number(segment: str, *, allow_letter: bool) -> str | None:
 
     candidate: list[str] = []
     letter = ""
+    letter_prefix = False
     for token in tokens:
         folded = token.casefold()
         is_number = token.isdigit() or folded in ENGLISH_NUMBERS or folded in ARABIC_NUMBERS
@@ -148,8 +149,10 @@ def _parse_cued_number(segment: str, *, allow_letter: bool) -> str | None:
             return None
         if allow_letter and not letter and spoken_letter:
             letter = spoken_letter
+            letter_prefix = not candidate
         elif allow_letter and not letter and len(token) == 1 and token.isascii() and token.isalpha():
             letter = token.upper()
+            letter_prefix = not candidate
         break
 
     if not candidate:
@@ -160,7 +163,7 @@ def _parse_cued_number(segment: str, *, allow_letter: bool) -> str | None:
         number = _number_words_to_int(" ".join(candidate))
     if number is None:
         return None
-    value = str(number) + letter
+    value = (letter + str(number)) if letter and letter_prefix else (str(number) + letter)
     return valid_building(value) if allow_letter else valid_unit_number(value)
 
 
@@ -413,7 +416,7 @@ def confirm_location_node(state: RequestState) -> dict:
             recognized.append(f"رقم الوحدة {location['unit_number']}")
         response = (f"فهمت {' و'.join(recognized)}.\n"
                     "هل الرقم صحيح؟ اكتب «نعم» للتأكيد، أو أرسل التصحيح. "
-                    "رقم الوحدة أرقام فقط، ورقم المبنى يمكن أن يتبعه حرف واحد.")
+                    "رقم الوحدة أرقام فقط، ورقم المبنى يمكن أن يكون حرفًا واحدًا قبل الأرقام أو بعدها.")
     else:
         recognized = []
         if location.get("building"):
@@ -422,7 +425,7 @@ def confirm_location_node(state: RequestState) -> dict:
             recognized.append(f"unit {location['unit_number']}")
         response = (f"I heard {' and '.join(recognized)}.\n"
                     "Is that correct? Reply YES to confirm or send a correction. "
-                    "A unit number contains digits only; a building number may end in one letter.")
+                    "A unit number contains digits only; a building number may have one letter before or after the digits.")
     return {"response": response, "phase": "awaiting_location_confirmation"}
 
 
@@ -450,9 +453,9 @@ def accept_location_node(state: RequestState) -> dict:
 
 def request_location_correction_node(state: RequestState) -> dict:
     if state.get("response_language") == "ar":
-        response = "من فضلك أرسل رقم المبنى ورقم الوحدة الصحيحين، مثل: المبنى 40، الوحدة 7B."
+        response = "من فضلك أرسل رقم المبنى ورقم الوحدة الصحيحين، مثل: المبنى B40 أو 40B، والوحدة 7."
     else:
-        response = "Please send the correct building and unit numbers, for example: building 40, unit 7B."
+        response = "Please send the correct building and unit numbers, for example: building B40 or 40B, unit 7."
     return {"fields": state.get("previous_fields") or {},
             "response": response, "phase": "awaiting_location_correction"}
 
@@ -464,7 +467,7 @@ def follow_up_node(state: RequestState) -> dict:
     other_missing = [key for key in missing if key != "issue_details"]
     if arabic:
         labels = {"compound": "اسم الكومباوند (Marassi أو Soul أو Uptown Cairo أو Mivida أو Bellevie أو Cairo Gate)",
-                  "building": "رقم المبنى (رقم، ويمكن أن يتبعه حرف واحد)",
+                  "building": "رقم المبنى (حرف واحد قبل الأرقام أو بعدها، مثل B40 أو 40B)",
                   "unit_number": "رقم الوحدة (أرقام فقط بدون حروف)", "issue_description": "وصف المشكلة"}
         requested = "، ".join(labels.get(key, "") for key in other_missing if labels.get(key))
         question = f"من فضلك أرسل أو قل في رسالة صوتية: {requested}." if requested else ""
@@ -473,7 +476,7 @@ def follow_up_node(state: RequestState) -> dict:
             question = f"{question}\n{details_prompt}" if question else details_prompt
     else:
         labels = {"compound": "compound (Marassi, Soul, Uptown Cairo, Mivida, Bellevie, or Cairo Gate)",
-                  "building": "building number (digits, optionally followed by one letter)",
+                  "building": "building number (one letter before or after the digits, e.g. B40 or 40B)",
                   "unit_number": "unit number (digits only, no letters)",
                   "issue_description": "problem description"}
         requested = ", ".join(labels[key] for key in other_missing if key in labels)
@@ -528,12 +531,17 @@ def classify_node(state: RequestState) -> dict:
     fields = state.get("fields") or state.get("previous_fields") or {}
     try:
         prediction = classify(fields.get("issue_description") or "")
-    except NotImplementedError:
-        response = ("تم تأكيد التفاصيل، لكن التصنيف غير جاهز بعد، لذلك لم يتم حفظ الطلب."
-                    if state.get("response_language") == "ar"
-                    else "Your details are confirmed, but classification is not implemented yet, so the request was not saved.")
-        return {"phase": "classification_not_implemented",
-                "response": response}
+    except ClassifierUnavailable as exc:
+        logger.error("Request classifier unavailable: %s", exc)
+        response = (
+            "تم تأكيد طلبك، لكن التصنيف المحلي غير متاح الآن. شغّل Ollama وتأكد من تثبيت "
+            "qwen3-embedding:4b، ثم أرسل «نعم» لإعادة المحاولة. لم يتم حفظ الطلب بعد."
+            if state.get("response_language") == "ar" else
+            "Your request is confirmed, but local classification is unavailable. Start Ollama "
+            "and ensure qwen3-embedding:4b is installed, then reply YES to retry. The request "
+            "has not been saved yet."
+        )
+        return {"phase": "classification_unavailable", "response": response}
     return {"prediction": prediction, "phase": "classified"}
 
 
@@ -549,8 +557,19 @@ def save_node(state: RequestState) -> dict:
             urgency=prediction.get("urgency", "medium"), confidence=prediction["confidence"],
             predictions=prediction))
         db.commit()
-    response = (f"تم حفظ الطلب. رقم التذكرة {ticket}." if state.get("response_language") == "ar"
-                else f"Request saved. Ticket {ticket}.")
+    if state.get("response_language") == "ar":
+        categories = {"plumbing": "سباكة", "electricity": "كهرباء", "AC": "تكييف",
+                      "carpentry": "نجارة", "pest control": "مكافحة آفات", "general": "عام"}
+        urgencies = {"low": "منخفضة", "medium": "متوسطة", "high": "عالية", "emergency": "طارئة"}
+        category_text = categories.get(prediction["category"], prediction["category"])
+        urgency_text = urgencies.get(prediction.get("urgency", "medium"), "متوسطة")
+        confidence_note = " (مبدئي)" if prediction.get("needs_review") else ""
+        response = (f"تم حفظ الطلب وتصنيفه{confidence_note}: {category_text}، "
+                    f"الأولوية {urgency_text}. رقم التذكرة {ticket}.")
+    else:
+        confidence_note = " (provisional)" if prediction.get("needs_review") else ""
+        response = (f"Request saved and classified{confidence_note}: {prediction['category']}, "
+                    f"priority {prediction.get('urgency', 'medium')}. Ticket {ticket}.")
     return {"ticket_number": ticket, "phase": "saved", "response": response}
 
 

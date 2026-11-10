@@ -19,7 +19,7 @@ bot = Bot(settings.telegram_bot_token)
 dp = Dispatcher()
 asr_model = None
 logger = logging.getLogger(__name__)
-BOT_BUILD = "2026-11-05-location-confirmation-2"
+BOT_BUILD = "2026-11-05-ml-classifier"
 
 def language_for(message: Message, text: str = "") -> str:
     session = load_session(str(message.chat.id), str(message.from_user.id))

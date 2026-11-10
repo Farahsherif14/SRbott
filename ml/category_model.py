@@ -30,6 +30,7 @@ from pathlib import Path
 import datetime
 import hashlib
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -39,15 +40,19 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
-from config import PROC, SEED
-from text_utils import clean_text, detect_lang
+try:  # Support both `python ml/category_model.py ...` and app imports.
+    from .config import PROC, SEED
+    from .text_utils import clean_text, detect_lang
+except ImportError:  # pragma: no cover - CLI execution from the ml directory
+    from config import PROC, SEED
+    from text_utils import clean_text, detect_lang
 
 ROOT = PROC.parents[1]
 MODEL_PATH = ROOT / "models" / "category_clf.joblib"
 TEST_PATH = ROOT / "data" / "test" / "test_handwritten.csv"
 CHECK_PATH = PROC / "arabic_check.csv"
 
-HOST = "http://localhost:11434"
+HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 EMB_MODEL = "qwen3-embedding:4b"
 PREFIX = "Instruct: Classify a resident maintenance request into a service category\nQuery: "
 C = 10.0
