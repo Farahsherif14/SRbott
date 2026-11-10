@@ -1,7 +1,61 @@
+[project]
+name = "srbott"
+version = "0.1.0"
+description = "Bilingual Telegram bot that turns maintenance reports into service requests."
+requires-python = ">=3.12"
+# The same versions and ranges as requirements.txt (the team's pins).
+# uv.lock records the exact version of every package. Install with: uv sync
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "groq>=0.30,<1",
+    "langgraph>=0.2,<2",
+    "pydantic==2.10.6",
+    "pydantic-settings>=2.4,<3",
+    "python-dotenv>=0.21,<2",  # groq_relay.py imports dotenv directly
+    "sqlalchemy>=2.0,<3",
+    "psycopg[binary]>=3.2,<4",
+    "redis>=5,<7",
+    "aiogram==3.31.0",
+    "python-multipart>=0.0.9",
+    # The classifier (app/classifier -> ml/category_model.py) needs these while the app runs
+    "joblib>=1.3,<2",
+    "numpy>=1.26,<2",
+    "pandas>=2.0,<3",
+    # = the version models/category_clf.joblib was trained with; update both together
+    "scikit-learn==1.7.2",
+]
+
+# Optional sets of packages. `uv sync` installs only "dev";
+# add others with e.g. `uv sync --group stt`.
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+# Voice notes (Tawasul / NVIDIA NeMo): several GB, so not installed by default
+stt = [
+    "nemo_toolkit[asr]==2.0.0",
+    "pytorch-lightning==2.4.0",
+    "imageio-ffmpeg>=0.5,<1",
+]
+# The Streamlit dashboard: uv run streamlit run dashboard/app.py
+dashboard = [
+    "streamlit>=1.40,<2",
+]
+
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+# Ruff checks only these paths for now. Other folders are added when their owner agrees
+# or when they are reworked, so CI never forces style-only changes on open work.
+include = ["tests/**/*.py"]
+
+[tool.ruff.lint]
+# Keep ruff's default rules and add: I = import order, UP = modern Python syntax, B = common bugs
+extend-select = ["I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The project is not installed as a package, so tell pytest where to find `app`
 pythonpath = ["."]

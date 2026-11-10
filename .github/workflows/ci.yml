@@ -1,0 +1,47 @@
+# CI: GitHub checks the code on every push and pull request.
+# The same checks as on a laptop: ruff check, ruff format --check, pytest.
+# It needs no secrets. The repo is public, so these logs are public: never print secrets or
+# personal data here. Tests use a fake Telegram token and never call real APIs.
+
+name: CI
+
+on:
+  push:          # any branch
+  pull_request:
+
+# The GITHUB_TOKEN of this workflow can only read the code (least privilege).
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint, format and test
+    runs-on: ubuntu-latest  # a new, empty Linux machine for every run
+    timeout-minutes: 10     # the default is 6 hours; a stuck test should fail fast
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false  # CI never pushes, so don't keep the token on disk
+
+      - name: Install uv
+        # setup-uv has no short "v10" tag, only exact tags; its releases are immutable.
+        uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: "0.12.19"  # pinned; update it together with the uv on our laptops
+          # Caching is on by default: the key is a hash of uv.lock + pyproject.toml.
+
+      - name: Install dependencies
+        # --locked: stop if uv.lock does not match pyproject.toml (e.g. uv.lock not updated).
+        # Only the "dev" group: no NeMo (stt) and no Streamlit (dashboard) in CI.
+        run: uv sync --locked
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format --check)
+        # --check: only report. CI never changes code; fix it locally with: uv run ruff format .
+        run: uv run ruff format --check .
+
+      - name: Tests (pytest)
+        run: uv run pytest
