@@ -1,4 +1,4 @@
-"""Run the local Groq relay and Telegram bot as one managed process."""
+﻿"""Run the local Groq relay and Telegram bot as one managed process."""
 from __future__ import annotations
 
 import subprocess
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-ENV = ROOT / ".venv" / "bin" / "python"
+ENV = Path(sys.executable)
 def ollama_base_url() -> str:
     configured = os.environ.get("OLLAMA_HOST")
     if configured:
