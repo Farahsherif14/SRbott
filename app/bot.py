@@ -1,10 +1,6 @@
 import asyncio
-<<<<<<< HEAD
 import socket
 import json
-=======
-import fcntl
->>>>>>> origin/main
 import logging
 import os
 from io import BytesIO
@@ -24,11 +20,7 @@ bot = Bot(settings.telegram_bot_token)
 dp = Dispatcher()
 asr_model = None
 logger = logging.getLogger(__name__)
-<<<<<<< HEAD
 BOT_BUILD = "2026-11-10-windows-lock"
-=======
-BOT_BUILD = "2026-11-05-ml-classifier"
->>>>>>> origin/main
 
 def language_for(message: Message, text: str = "") -> str:
     session = load_session(str(message.chat.id), str(message.from_user.id))
