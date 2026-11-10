@@ -12,6 +12,21 @@ Bilingual (Arabic and English) Telegram service request bot with a local FastAPI
 - `service_requests.db` — local SQLite database.
 - `tawasul_egy_stt.nemo` — local speech recognition checkpoint.
 
+## Install with uv
+
+[uv](https://docs.astral.sh/uv/) installs the exact versions in `uv.lock`, the same set that CI uses, with Python 3.12 (`.python-version`). Run one command per line (this works in PowerShell and bash):
+
+```bash
+uv sync                      # the app + dev tools (pytest, ruff)
+uv sync --group stt          # + voice notes (NVIDIA NeMo, several GB)
+uv sync --group dashboard    # + the Streamlit dashboard
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+```
+
+`uv sync` keeps only what you ask for: if you need voice notes, use `--group stt` every time you sync. Run programs inside the environment with `uv run`, for example `uv run python run_bot.py`. After you change dependencies in `pyproject.toml`, run `uv lock` and commit `uv.lock`. `requirements.txt` still works with pip for now.
+
 ## Install and run locally (no Docker)
 
 Activate the existing virtual environment and install project requirements if needed:
@@ -20,6 +35,8 @@ Activate the existing virtual environment and install project requirements if ne
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
+
+On Windows (PowerShell), activate with `.venv\Scripts\activate` instead; `run_bot.py` then uses `.venv\Scripts\python.exe`.
 
 Set `GROQ_API_KEY` and `TELEGRAM_BOT_TOKEN` in `.env`. Keep this file private. The `.env.example` file lists the expected settings. Place the Tawasul checkpoint at `tawasul_egy_stt.nemo`, or set `TAWASUL_MODEL_PATH`.
 
