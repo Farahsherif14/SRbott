@@ -30,8 +30,12 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr | None = None
     telegram_bot_token: SecretStr | None = None
     # URLs can hold a password (e.g. postgresql://user:password@host/db), so they are secrets too.
-    # The SQLite path starts at the current working folder (the project root when run as usual).
-    database_url: SecretStr = SecretStr("sqlite:///./service_requests.db")
+    # The PostgreSQL database of the new code (app/db/models.py, Alembic). No default: the code
+    # that needs it calls require("database_url").
+    database_url: SecretStr | None = None
+    # The old database of app/db/__init__.py (the current bot and API), until the flow moves to
+    # PostgreSQL. The SQLite path starts at the current working folder (normally the project root).
+    legacy_database_url: SecretStr = SecretStr("sqlite:///./service_requests.db")
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
 
     # Not secret

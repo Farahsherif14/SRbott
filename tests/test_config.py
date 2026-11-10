@@ -12,7 +12,8 @@ from app.config import ROOT_DIR, Settings, get_settings, settings
 DEFAULTS = {
     "groq_api_key": None,
     "telegram_bot_token": None,
-    "database_url": "sqlite:///./service_requests.db",
+    "database_url": None,  # PostgreSQL, set in .env (Step 4: the old SQLite default moved below)
+    "legacy_database_url": "sqlite:///./service_requests.db",
     "redis_url": "redis://localhost:6379/0",
     "groq_model": "openai/gpt-oss-20b",
     "groq_relay_url": "http://127.0.0.1:8765/extract",
@@ -128,7 +129,7 @@ def test_log_secrets_skips_settings_that_are_not_set() -> None:
     secrets = Settings(_env_file=None).log_secrets()
 
     # Only the 2 default URLs: no token, no key, no empty string, no password
-    assert sorted(secrets) == sorted([DEFAULTS["database_url"], DEFAULTS["redis_url"]])
+    assert sorted(secrets) == sorted([DEFAULTS["legacy_database_url"], DEFAULTS["redis_url"]])
 
 
 def test_settings_object_is_the_cached_one() -> None:

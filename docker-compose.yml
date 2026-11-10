@@ -1,0 +1,38 @@
+# Local databases for development. Redis is added in the next step; the app and Metabase later.
+# Start:  docker compose up -d --wait postgres      Status: docker compose ps
+# ${...} values are read from .env (see .env.example). Never run plain `docker compose config`:
+# it prints the password. Use `docker compose config --quiet` to check the file.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    # terse: the server log keeps each error and the rule's name, but not DETAIL, HINT or
+    # CONTEXT. A refused row's DETAIL contains the whole row (name, phone), and personal data
+    # must never be in a log.
+    command: ["postgres", "-c", "log_error_verbosity=terse"]
+    environment:
+      # ":?" stops compose with this message if the value is missing in .env (fail fast).
+      # Only used the first time, when the pgdata volume is empty.
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    ports:
+      # host IP : host port : container port. 127.0.0.1 = this computer only.
+      # POSTGRES_PORT (default 5432) lets another project keep 5432 on the same computer;
+      # DATABASE_URL in .env must use the same port.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # $$ = the container's own variable (not filled in by compose).
+      # -h 127.0.0.1 checks over TCP, so the temporary server of the first-time setup
+      # (socket only) does not count as ready.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 30s  # the first start creates the database; failures here don't count
+
+volumes:
+  pgdata:  # the data lives here, outside the repo; `docker compose down` keeps it
