@@ -92,7 +92,10 @@ def main() -> int:
     children: list[tuple[str, subprocess.Popen]] = []
     try:
         ensure_ollama(children)
-        relay = subprocess.Popen([str(ENV), "groq_relay.py"], cwd=ROOT)
+        relay = subprocess.Popen(
+            [str(ENV), "-m", "uvicorn", "groq_relay:app", "--host", "127.0.0.1", "--port", "8765"],
+            cwd=ROOT,
+        )
         children.append(("Groq relay", relay))
 
         # Give the relay a moment to catch an invalid key or occupied port.

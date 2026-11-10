@@ -1,7 +1,5 @@
 node_modules
 .env
-<<<<<<< HEAD
-=======
 .env.*
 !.env.example
 
@@ -32,4 +30,3 @@ mlruns/
 # Local speech model checkpoint
 tawasul_egy_stt.nemo
 .service-request-bot.lock
->>>>>>> origin/main
